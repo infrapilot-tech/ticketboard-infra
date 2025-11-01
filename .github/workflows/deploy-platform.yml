@@ -1,0 +1,33 @@
+name: Deploy Platform
+
+on:
+  repository_dispatch:
+    types: [ backend-updated, frontend-updated ]
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+
+env:
+  NAMESPACE: ticketboard
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Kind Cluster
+        uses: engineerd/setup-kind@v0.6.0
+        with:
+          version: "v0.20.0"
+          config: kind-cluster.yaml
+
+      - name: Deploy Infrastructure
+        run: |
+          ./scripts/deploy-all.sh
+
+      - name: Health Check
+        run: |
+          ./scripts/health-check.sh
