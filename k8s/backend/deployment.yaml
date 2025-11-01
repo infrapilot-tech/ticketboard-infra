@@ -16,6 +16,7 @@ spec:
       containers:
         - name: backend
           image: localhost:5000/ticketboard-backend:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
           env:
