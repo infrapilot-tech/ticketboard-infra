@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: localhost:5000/frontend:latest
+          image: localhost:5000/ticketboard-frontend:latest
           ports:
             - containerPort: 80
           resources:
