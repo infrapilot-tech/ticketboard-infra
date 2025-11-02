@@ -3,14 +3,23 @@ kind: Kustomization
 
 namespace: ticketboard
 
-bases:
-  - ../../base
+resources:
+- ../../base
 
-patchesStrategicMerge:
-  - backend-patch.yaml
+patches:
+- path: backend-patch.yaml
+  target:
+    kind: Deployment
+    name: backend
+- path: frontend-patch.yaml
+  target:
+    kind: Deployment
+    name: frontend
 
 images:
-  - name: ghost0/ticketboard-backend
-    newTag: latest
-  - name: ghost0/ticketboard-frontend
-    newTag: latest
+- name: ticketboard-backend
+  newName: $DOCKERHUB_USERNAME/ticketboard-backend
+  newTag: latest
+- name: ticketboard-frontend
+  newName: $DOCKERHUB_USERNAME/ticketboard-frontend
+  newTag: latest

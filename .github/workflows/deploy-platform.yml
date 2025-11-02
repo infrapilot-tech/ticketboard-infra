@@ -1,17 +1,18 @@
 name: Deploy to Kubernetes
 
 on:
-  workflow_dispatch: # Solo ejecución manual
+  workflow_dispatch:
   push:
-    branches: [ main ] # También en push a main si quieres
+    branches: [ main ]
 
 env:
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   BACKEND_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/ticketboard-backend
   FRONTEND_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/ticketboard-frontend
 
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: organization-runner
 
     steps:
       - name: Checkout code
@@ -21,33 +22,46 @@ jobs:
         run: |
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
-          kubectl config use-context ${{ vars.CLUSTER_NAME }}
+          kubectl config use-context kind-kind
 
       - name: Create namespace if not exists
         run: |
-          kubectl create namespace ${{ vars.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create namespace ticketboard --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Deploy with Kustomize
+      - name: Create Docker Hub secret
         run: |
+          kubectl create secret docker-registry dockerhub-secret \
+            --docker-server=docker.io \
+            --docker-username=${{ secrets.DOCKERHUB_USERNAME }} \
+            --docker-password=${{ secrets.DOCKERHUB_TOKEN }} \
+            -n ticketboard --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Build and apply Kustomize
+        run: |
+          # Primero probar build para verificar que funciona
+          kustomize build k8s/overlays/development
+
+          # Luego aplicar
           kubectl apply -k k8s/overlays/development
 
-      - name: Update to latest images
+      - name: Update images to latest (fallback)
         run: |
-          kubectl set image deployment/backend -n ${{ vars.NAMESPACE }} backend=${{ env.BACKEND_IMAGE }}:latest
-          kubectl set image deployment/frontend -n ${{ vars.NAMESPACE }} frontend=${{ env.FRONTEND_IMAGE }}:latest
+          # Como fallback, actualizar imágenes directamente
+          kubectl set image deployment/backend -n ticketboard backend=${{ env.BACKEND_IMAGE }}:latest
+          kubectl set image deployment/frontend -n ticketboard frontend=${{ env.FRONTEND_IMAGE }}:latest
 
       - name: Wait for database
         run: |
           echo "⏳ Waiting for PostgreSQL to be ready..."
-          kubectl wait --for=condition=ready pod -l app=postgres -n ${{ vars.NAMESPACE }} --timeout=300s
+          kubectl wait --for=condition=ready pod -l app=postgres -n ticketboard --timeout=300s
 
-      - name: Wait for all services
+      - name: Wait for services
         run: |
-          echo "⏳ Waiting for all services to be ready..."
-          timeout 300s bash -c 'until kubectl get pods -n ${{ vars.NAMESPACE }} -l app=backend --no-headers | grep -q "Running"; do sleep 5; done'
-          timeout 300s bash -c 'until kubectl get pods -n ${{ vars.NAMESPACE }} -l app=frontend --no-headers | grep -q "Running"; do sleep 5; done'
+          echo "⏳ Waiting for backend and frontend..."
+          timeout 300s bash -c 'until kubectl get pods -n ticketboard -l app=backend --no-headers 2>/dev/null | grep -q "Running"; do sleep 5; done'
+          timeout 300s bash -c 'until kubectl get pods -n ticketboard -l app=frontend --no-headers 2>/dev/null | grep -q "Running"; do sleep 5; done'
 
       - name: Verify deployment
         run: |
           echo "✅ Deployment completed!"
-          kubectl get all -n ${{ vars.NAMESPACE }}
+          kubectl get all -n ticketboard

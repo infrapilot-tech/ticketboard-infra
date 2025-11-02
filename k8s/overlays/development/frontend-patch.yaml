@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: backend
+  name: frontend
   namespace: ticketboard
 spec:
   template:
@@ -9,5 +9,5 @@ spec:
       imagePullSecrets:
         - name: dockerhub-secret
       containers:
-        - name: backend
-          image: docker.io/$DOCKERHUB_USERNAME/ticketboard-backend:latest
+        - name: frontend
+          image: docker.io/$DOCKERHUB_USERNAME/ticketboard-frontend:latest
