@@ -24,6 +24,13 @@ jobs:
           echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
           kubectl config use-context kind-kind
 
+      - name: Install kustomize
+        run: |
+          # Instalar kustomize
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+          kustomize version
+
       - name: Create namespace if not exists
         run: |
           kubectl create namespace ticketboard --dry-run=client -o yaml | kubectl apply -f -
@@ -38,15 +45,11 @@ jobs:
 
       - name: Build and apply Kustomize
         run: |
-          # Primero probar build para verificar que funciona
-          kustomize build k8s/overlays/development
+          echo "🔨 Building Kustomize manifests..."
+          kustomize build k8s/overlays/development | kubectl apply -f -
 
-          # Luego aplicar
-          kubectl apply -k k8s/overlays/development
-
-      - name: Update images to latest (fallback)
+      - name: Update images to latest
         run: |
-          # Como fallback, actualizar imágenes directamente
           kubectl set image deployment/backend -n ticketboard backend=${{ env.BACKEND_IMAGE }}:latest
           kubectl set image deployment/frontend -n ticketboard frontend=${{ env.FRONTEND_IMAGE }}:latest
 
