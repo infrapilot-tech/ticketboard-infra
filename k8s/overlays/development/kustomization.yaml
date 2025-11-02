@@ -10,7 +10,7 @@ patchesStrategicMerge:
   - backend-patch.yaml
 
 images:
-  - name: localhost:5000/ticketboard-backend
+  - name: ghost0/ticketboard-backend
     newTag: latest
-  - name: localhost:5000/ticketboard-frontend
+  - name: ghost0/ticketboard-frontend
     newTag: latest

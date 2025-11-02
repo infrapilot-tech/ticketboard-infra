@@ -1,10 +1,13 @@
 name: Deploy to Kubernetes
 
 on:
+  workflow_dispatch: # Solo ejecución manual
   push:
-    branches: [ main ]
-  workflow_dispatch:
+    branches: [ main ] # También en push a main si quieres
 
+env:
+  BACKEND_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/ticketboard-backend
+  FRONTEND_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/ticketboard-frontend
 
 jobs:
   deploy:
@@ -16,55 +19,35 @@ jobs:
 
       - name: Configure Kubernetes
         run: |
-          kubectl config use-context docker-desktop
-          kubectl create namespace ticketboard --dry-run=client -o yaml | kubectl apply -f -
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
+          kubectl config use-context ${{ vars.CLUSTER_NAME }}
 
-      - name: Configure local registry secret
+      - name: Create namespace if not exists
         run: |
-          kubectl create secret docker-registry local-registry \
-            --docker-server=host.docker.internal:5000 \
-            --docker-username= \
-            --docker-password= \
-            --docker-email= \
-            -n ticketboard --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create namespace ${{ vars.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Deploy Database
+      - name: Deploy with Kustomize
         run: |
-          kubectl apply -f k8s/postgres-pvc.yaml
-          kubectl apply -f k8s/postgres-deployment.yaml
-          kubectl apply -f k8s/postgres-service.yaml
+          kubectl apply -k k8s/overlays/development
+
+      - name: Update to latest images
+        run: |
+          kubectl set image deployment/backend -n ${{ vars.NAMESPACE }} backend=${{ env.BACKEND_IMAGE }}:latest
+          kubectl set image deployment/frontend -n ${{ vars.NAMESPACE }} frontend=${{ env.FRONTEND_IMAGE }}:latest
 
       - name: Wait for database
         run: |
           echo "⏳ Waiting for PostgreSQL to be ready..."
-          for i in {1..30}; do
-            if kubectl get pod -n ticketboard -l app=postgres -o jsonpath='{.items[0].status.phase}' 2>/dev/null | grep -q Running; then
-              echo "✅ PostgreSQL is running"
-              break
-            fi
-            echo "⏱️ Attempt $i/30 - Waiting for PostgreSQL..."
-            sleep 10
-          done
-
-      - name: Deploy Backend and Frontend
-        run: |
-          kubectl apply -f k8s/backend-deployment.yaml
-          kubectl apply -f k8s/backend-service.yaml
-          kubectl apply -f k8s/frontend-deployment.yaml
-          kubectl apply -f k8s/frontend-service.yaml
-
-      - name: Update images to use local registry
-        run: |
-          kubectl set image deployment/backend -n ticketboard backend=host.docker.internal:5000/ticketboard-backend:latest
-          kubectl set image deployment/frontend -n ticketboard frontend=host.docker.internal:5000/ticketboard-frontend:latest
+          kubectl wait --for=condition=ready pod -l app=postgres -n ${{ vars.NAMESPACE }} --timeout=300s
 
       - name: Wait for all services
         run: |
           echo "⏳ Waiting for all services to be ready..."
-          timeout 300s bash -c 'until kubectl get pods -n ticketboard -l app=backend --no-headers | grep -q "Running"; do sleep 5; done'
-          timeout 300s bash -c 'until kubectl get pods -n ticketboard -l app=frontend --no-headers | grep -q "Running"; do sleep 5; done'
+          timeout 300s bash -c 'until kubectl get pods -n ${{ vars.NAMESPACE }} -l app=backend --no-headers | grep -q "Running"; do sleep 5; done'
+          timeout 300s bash -c 'until kubectl get pods -n ${{ vars.NAMESPACE }} -l app=frontend --no-headers | grep -q "Running"; do sleep 5; done'
 
       - name: Verify deployment
         run: |
           echo "✅ Deployment completed!"
-          kubectl get all -n ticketboard
+          kubectl get all -n ${{ vars.NAMESPACE }}
