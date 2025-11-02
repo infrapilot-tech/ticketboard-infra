@@ -1,4 +1,4 @@
-name: Deploy Infrastructure
+name: Deploy Complete TicketBoard
 
 on:
   push:
@@ -9,108 +9,80 @@ on:
 jobs:
   deploy-infrastructure:
     runs-on: ubuntu-latest
+    outputs:
+      cluster-ready: ${{ steps.status.outputs.ready }}
 
     steps:
-      - name: Checkout code
+      - name: Checkout Infra
         uses: actions/checkout@v4
+        with:
+          repository: GhostGto/ticketboard-infra
+          path: infra
 
-      - name: Setup Kubernetes Tools
+      - name: Setup Cluster
         run: |
-          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
-          chmod +x ./kind
-          sudo mv ./kind /usr/local/bin/kind
+          cd infra
+          chmod +x scripts/setup-kind.sh
+          ./scripts/setup-kind.sh
+          echo "ready=true" >> $GITHUB_OUTPUT
 
-          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-          chmod +x ./kubectl
-          sudo mv ./kubectl /usr/local/bin/kubectl
+  deploy-backend:
+    runs-on: ubuntu-latest
+    needs: deploy-infrastructure
+    if: needs.deploy-infrastructure.outputs.cluster-ready == 'true'
 
-      - name: Create Kind Cluster
+    steps:
+      - name: Checkout Backend
+        uses: actions/checkout@v4
+        with:
+          repository: GhostGto/ticketboard-backend
+          path: backend
+
+      - name: Build and Deploy Backend
         run: |
-          if [ -f "kind-cluster.yaml" ]; then
-            kind create cluster --name ticketboard --config kind-cluster.yaml --wait 5m
-          else
-            kind create cluster --name ticketboard --wait 5m
-          fi
-          kubectl cluster-info
-
-      - name: Setup Local Registry
-        run: |
-          docker run -d --restart=always -p 5000:5000 --name kind-registry registry:2
-          until docker network connect kind kind-registry 2>/dev/null; do sleep 2; done
-
-      - name: Validate Kubernetes Manifests
-        run: |
-          echo "🔍 Validating Kubernetes manifests..."
-
-          # Validar manifests base
-          if [ -f "k8s/base/kustomization.yaml" ]; then
-            kubectl kustomize k8s/base/ --load-restrictor=LoadRestrictionsNone > /dev/null && echo "✅ Base kustomization valid"
-          fi
-
-          # Validar database manifests
-          if [ -f "k8s/database/kustomization.yaml" ]; then
-            kubectl kustomize k8s/database/ --load-restrictor=LoadRestrictionsNone > /dev/null && echo "✅ Database kustomization valid"
-          else
-            # Validar manifests individuales de database
-            for file in k8s/database/*.yaml; do
-              if [ -f "$file" ]; then
-                kubectl apply --dry-run=client -f "$file" && echo "✅ $file valid"
-              fi
-            done
-          fi
-
-      - name: Deploy Base Infrastructure
-        run: |
-          echo "🏗️ Deploying base infrastructure..."
-          kubectl apply -k k8s/base/
-
-      - name: Deploy Database First
-        run: |
-          echo "🗄️ Deploying database first..."
-
-          # Aplicar PVC primero
-          if [ -f "k8s/database/pvc.yaml" ]; then
-            kubectl apply -f k8s/database/pvc.yaml -n ticketboard
-            echo "✅ PVC created"
-          fi
-
-          # Aplicar PostgreSQL deployment
-          if [ -f "k8s/database/postgresql.yaml" ]; then
-            kubectl apply -f k8s/database/postgresql.yaml -n ticketboard
-          elif [ -f "k8s/database/postgresql-fixed.yaml" ]; then
-            kubectl apply -f k8s/database/postgresql-fixed.yaml -n ticketboard
-          else
-            # Intentar con kustomize
-            kubectl apply -k k8s/database/ -n ticketboard
-          fi
-
-          # Esperar por PostgreSQL
-          echo "⏳ Waiting for PostgreSQL to be ready..."
-          kubectl wait --for=condition=ready pod -l app=postgres -n ticketboard --timeout=180s
-          echo "✅ PostgreSQL is ready"
-
-      - name: Deploy Backend
-        run: |
-          echo "🔧 Deploying backend..."
+          cd backend
+          docker build -t localhost:5000/ticketboard-backend:latest .
+          docker push localhost:5000/ticketboard-backend:latest
           kubectl apply -k k8s/backend/ -n ticketboard
 
-          if kubectl get deployment -n ticketboard backend 2>/dev/null; then
-            kubectl rollout status deployment/backend -n ticketboard --timeout=180s
-            echo "✅ Backend is ready"
-          fi
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    needs: [ deploy-infrastructure, deploy-backend ]
 
-      - name: Deploy Frontend
+    steps:
+      - name: Checkout Frontend
+        uses: actions/checkout@v4
+        with:
+          repository: GhostGto/ticketboard-frontend
+          path: frontend
+
+      - name: Build and Deploy Frontend
         run: |
-          echo "🎨 Deploying frontend..."
+          cd frontend
+          npm ci
+          npm run build
+          docker build -t localhost:5000/ticketboard-frontend:latest .
+          docker push localhost:5000/ticketboard-frontend:latest
           kubectl apply -k k8s/frontend/ -n ticketboard
 
-          if kubectl get deployment -n ticketboard frontend 2>/dev/null; then
-            kubectl rollout status deployment/frontend -n ticketboard --timeout=180s
-            echo "✅ Frontend is ready"
-          fi
+  verify-deployment:
+    runs-on: ubuntu-latest
+    needs: [ deploy-backend, deploy-frontend ]
 
-      - name: Final Health Check
+    steps:
+      - name: Checkout Infra
+        uses: actions/checkout@v4
+        with:
+          repository: GhostGto/ticketboard-infra
+          path: infra
+
+      - name: Verify Complete Deployment
         run: |
-          echo "❤️ Final health check..."
+          cd infra
+          kubectl wait --for=condition=ready --timeout=300s -n ticketboard --all pod
+          echo "✅ TICKETBOARD DEPLOYMENT COMPLETED SUCCESSFULLY!"
+          echo ""
+          echo "🎉 Your application is now running!"
+          echo ""
+          echo "📊 Final Status:"
           kubectl get all -n ticketboard
-          echo "✅ All services deployed successfully!"
