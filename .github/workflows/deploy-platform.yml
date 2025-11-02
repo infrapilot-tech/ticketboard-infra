@@ -39,7 +39,6 @@ jobs:
       - name: Deploy Database
         run: |
           echo "🗄️ Deploying database..."
-          # Usar el archivo postgresql.yaml que contiene todo
           kubectl apply -f k8s/database/postgresql.yaml -n ticketboard
           kubectl apply -f k8s/database/pvc.yaml -n ticketboard
 
@@ -58,10 +57,8 @@ jobs:
       - name: Delete and recreate backend deployment
         run: |
           echo "🔧 Recreating backend deployment..."
-          # Eliminar deployment existente si existe
           kubectl delete deployment backend -n ticketboard --ignore-not-found=true
 
-          # Crear nuevo deployment con la imagen correcta
           kubectl apply -f - <<EOF
           apiVersion: apps/v1
           kind: Deployment
@@ -84,8 +81,10 @@ jobs:
                 - name: backend
                   image: ${{ env.BACKEND_IMAGE }}:latest
                   ports:
-                  - containerPort: 80
+                  - containerPort: 3000
                   env:
+                  - name: PORT
+                    value: "3000"
                   - name: DB_HOST
                     value: "postgres-service"
                   - name: DB_PORT
@@ -107,17 +106,18 @@ jobs:
                         key: DB_PASSWORD
                   readinessProbe:
                     httpGet:
-                      path: /health
-                      port: 80
-                    initialDelaySeconds: 20
-                    periodSeconds: 5
-                    timeoutSeconds: 3
+                      path: /healthz
+                      port: 3000
+                    initialDelaySeconds: 15
+                    periodSeconds: 10
+                    timeoutSeconds: 5
                   livenessProbe:
                     httpGet:
-                      path: /health
-                      port: 80
-                    initialDelaySeconds: 40
-                    periodSeconds: 10
+                      path: /healthz
+                      port: 3000
+                    initialDelaySeconds: 30
+                    periodSeconds: 15
+                    timeoutSeconds: 5
                   resources:
                     requests:
                       memory: "256Mi"
@@ -127,13 +127,29 @@ jobs:
                       cpu: "500m"
           EOF
 
+      - name: Update backend service
+        run: |
+          echo "🔧 Updating backend service..."
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: backend-service
+            namespace: ticketboard
+          spec:
+            selector:
+              app: backend
+            ports:
+              - port: 80
+                targetPort: 3000
+            type: ClusterIP
+          EOF
+
       - name: Delete and recreate frontend deployment
         run: |
           echo "🎨 Recreating frontend deployment..."
-          # Eliminar deployment existente si existe
           kubectl delete deployment frontend -n ticketboard --ignore-not-found=true
 
-          # Crear nuevo deployment con la imagen correcta
           kubectl apply -f - <<EOF
           apiVersion: apps/v1
           kind: Deployment
@@ -179,11 +195,6 @@ jobs:
                       cpu: "200m"
           EOF
 
-      - name: Deploy Ingress (si existe)
-        run: |
-          echo "🌐 Deploying ingress..."
-          kubectl apply -f k8s/base/ingress.yaml -n ticketboard 2>/dev/null || echo "Ingress not found or already deployed"
-
       - name: Wait for database
         run: |
           echo "⏳ Waiting for PostgreSQL to be ready..."
@@ -202,5 +213,5 @@ jobs:
           kubectl get pods -n ticketboard
           echo "🌐 Services:"
           kubectl get services -n ticketboard
-          echo "🔗 Ingress:"
-          kubectl get ingress -n ticketboard 2>/dev/null || echo "No ingress found"
+          echo "🔍 Testing connectivity..."
+          kubectl exec -n ticketboard -it $(kubectl get pod -n ticketboard -l app=backend -o name | head -1) -- curl -f http://localhost:3000/healthz && echo "✅ Backend health check passed"
