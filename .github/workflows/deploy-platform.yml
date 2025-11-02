@@ -24,13 +24,6 @@ jobs:
           echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
           kubectl config use-context kind-kind
 
-      - name: Install kustomize
-        run: |
-          # Instalar kustomize
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
-          sudo mv kustomize /usr/local/bin/
-          kustomize version
-
       - name: Create namespace if not exists
         run: |
           kubectl create namespace ticketboard --dry-run=client -o yaml | kubectl apply -f -
@@ -43,15 +36,138 @@ jobs:
             --docker-password=${{ secrets.DOCKERHUB_TOKEN }} \
             -n ticketboard --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Build and apply Kustomize
+      - name: Deploy Database and Services (immutable resources)
         run: |
-          echo "🔨 Building Kustomize manifests..."
-          kustomize build k8s/overlays/development | kubectl apply -f -
+          echo "🗄️ Deploying database and services..."
+          kubectl apply -f k8s/database/ -n ticketboard
+          kubectl apply -f k8s/backend/configmap.yaml -n ticketboard
+          kubectl apply -f k8s/backend/secrets.yaml -n ticketboard
+          kubectl apply -f k8s/backend/service.yaml -n ticketboard
+          kubectl apply -f k8s/frontend/service.yaml -n ticketboard
 
-      - name: Update images to latest
+      - name: Delete and recreate backend deployment
         run: |
-          kubectl set image deployment/backend -n ticketboard backend=${{ env.BACKEND_IMAGE }}:latest
-          kubectl set image deployment/frontend -n ticketboard frontend=${{ env.FRONTEND_IMAGE }}:latest
+          echo "🔧 Recreating backend deployment..."
+          # Eliminar deployment existente si existe
+          kubectl delete deployment backend -n ticketboard --ignore-not-found=true
+
+          # Crear nuevo deployment con la imagen correcta
+          kubectl apply -f - <<EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: backend
+            namespace: ticketboard
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: backend
+            template:
+              metadata:
+                labels:
+                  app: backend
+              spec:
+                imagePullSecrets:
+                - name: dockerhub-secret
+                containers:
+                - name: backend
+                  image: ${{ env.BACKEND_IMAGE }}:latest
+                  ports:
+                  - containerPort: 80
+                  env:
+                  - name: DB_HOST
+                    value: "postgres-service"
+                  - name: DB_PORT
+                    value: "5432"
+                  - name: DB_NAME
+                    valueFrom:
+                      configMapKeyRef:
+                        name: backend-config
+                        key: DB_NAME
+                  - name: DB_USERNAME
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-secrets
+                        key: DB_USERNAME
+                  - name: DB_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-secrets
+                        key: DB_PASSWORD
+                  readinessProbe:
+                    httpGet:
+                      path: /health
+                      port: 80
+                    initialDelaySeconds: 20
+                    periodSeconds: 5
+                    timeoutSeconds: 3
+                  livenessProbe:
+                    httpGet:
+                      path: /health
+                      port: 80
+                    initialDelaySeconds: 40
+                    periodSeconds: 10
+                  resources:
+                    requests:
+                      memory: "256Mi"
+                      cpu: "100m"
+                    limits:
+                      memory: "512Mi"
+                      cpu: "500m"
+          EOF
+
+      - name: Delete and recreate frontend deployment
+        run: |
+          echo "🎨 Recreating frontend deployment..."
+          # Eliminar deployment existente si existe
+          kubectl delete deployment frontend -n ticketboard --ignore-not-found=true
+
+          # Crear nuevo deployment con la imagen correcta
+          kubectl apply -f - <<EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: frontend
+            namespace: ticketboard
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: frontend
+            template:
+              metadata:
+                labels:
+                  app: frontend
+              spec:
+                imagePullSecrets:
+                - name: dockerhub-secret
+                containers:
+                - name: frontend
+                  image: ${{ env.FRONTEND_IMAGE }}:latest
+                  ports:
+                  - containerPort: 80
+                  readinessProbe:
+                    httpGet:
+                      path: /
+                      port: 80
+                    initialDelaySeconds: 10
+                    periodSeconds: 5
+                    timeoutSeconds: 3
+                  livenessProbe:
+                    httpGet:
+                      path: /
+                      port: 80
+                    initialDelaySeconds: 20
+                    periodSeconds: 10
+                  resources:
+                    requests:
+                      memory: "128Mi"
+                      cpu: "50m"
+                    limits:
+                      memory: "256Mi"
+                      cpu: "200m"
+          EOF
 
       - name: Wait for database
         run: |
@@ -67,4 +183,7 @@ jobs:
       - name: Verify deployment
         run: |
           echo "✅ Deployment completed!"
-          kubectl get all -n ticketboard
+          echo "📊 Pods status:"
+          kubectl get pods -n ticketboard
+          echo "🌐 Services:"
+          kubectl get services -n ticketboard
