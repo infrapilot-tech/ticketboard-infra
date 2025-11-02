@@ -12,7 +12,7 @@ env:
 
 jobs:
   deploy:
-    runs-on: organization-runner
+    runs-on: self-hosted
 
     steps:
       - name: Checkout code
