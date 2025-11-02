@@ -36,13 +36,23 @@ jobs:
             --docker-password=${{ secrets.DOCKERHUB_TOKEN }} \
             -n ticketboard --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Deploy Database and Services (immutable resources)
+      - name: Deploy Database
         run: |
-          echo "🗄️ Deploying database and services..."
-          kubectl apply -f k8s/database/ -n ticketboard
+          echo "🗄️ Deploying database..."
+          # Usar el archivo postgresql.yaml que contiene todo
+          kubectl apply -f k8s/database/postgresql.yaml -n ticketboard
+          kubectl apply -f k8s/database/pvc.yaml -n ticketboard
+
+      - name: Deploy Backend Config and Service
+        run: |
+          echo "🔧 Deploying backend configuration..."
           kubectl apply -f k8s/backend/configmap.yaml -n ticketboard
           kubectl apply -f k8s/backend/secrets.yaml -n ticketboard
           kubectl apply -f k8s/backend/service.yaml -n ticketboard
+
+      - name: Deploy Frontend Service
+        run: |
+          echo "🎨 Deploying frontend service..."
           kubectl apply -f k8s/frontend/service.yaml -n ticketboard
 
       - name: Delete and recreate backend deployment
@@ -169,6 +179,11 @@ jobs:
                       cpu: "200m"
           EOF
 
+      - name: Deploy Ingress (si existe)
+        run: |
+          echo "🌐 Deploying ingress..."
+          kubectl apply -f k8s/base/ingress.yaml -n ticketboard 2>/dev/null || echo "Ingress not found or already deployed"
+
       - name: Wait for database
         run: |
           echo "⏳ Waiting for PostgreSQL to be ready..."
@@ -187,3 +202,5 @@ jobs:
           kubectl get pods -n ticketboard
           echo "🌐 Services:"
           kubectl get services -n ticketboard
+          echo "🔗 Ingress:"
+          kubectl get ingress -n ticketboard 2>/dev/null || echo "No ingress found"
