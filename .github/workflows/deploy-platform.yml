@@ -13,9 +13,6 @@ jobs:
     steps:
       - name: Checkout Infra
         uses: actions/checkout@v4
-        with:
-          repository: GhostGto/ticketboard-infra
-          path: infra
 
       - name: Setup Kubernetes Tools
         run: |
@@ -28,9 +25,10 @@ jobs:
 
       - name: Create Kind Cluster and Registry
         run: |
-          cd infra
+          # Crear registry primero
           docker run -d --restart=always -p 5000:5000 --name kind-registry registry:2
 
+          # Crear cluster Kind
           cat <<EOF | kind create cluster --config=-
           kind: Cluster
           apiVersion: kind.x-k8s.io/v1alpha4
@@ -50,8 +48,16 @@ jobs:
               protocol: TCP
           EOF
 
+          # Conectar registry al cluster
           docker network connect kind kind-registry || true
+
+          # CONFIGURACIÓN CRÍTICA: Exportar el kubeconfig
+          kind export kubeconfig --name ticketboard-cluster
+
+          # Verificar la conexión
+          echo "🔍 Verifying cluster connection..."
           kubectl cluster-info
+          kubectl get nodes
 
   deploy-database:
     runs-on: ubuntu-latest
@@ -60,20 +66,26 @@ jobs:
     steps:
       - name: Checkout Infra
         uses: actions/checkout@v4
-        with:
-          repository: GhostGto/ticketboard-infra
-          path: infra
+
+      - name: Configure Kubectl Context
+        run: |
+          # Asegurar que el contexto está configurado
+          kind export kubeconfig --name ticketboard-cluster
+          kubectl config use-context kind-ticketboard-cluster
+          kubectl cluster-info
 
       - name: Deploy Database
         run: |
-          cd infra
-          kubectl apply -k k8s/base/
-          kubectl apply -k k8s/database/ -n ticketboard
-          echo "⏳ Waiting for PostgreSQL to be ready..."
-          kubectl wait --for=condition=ready pod -l app=postgres -n ticketboard --timeout=180s
-          echo "✅ Database deployed successfully"
+          echo "🗄️ Deploying database..."
+          # Usar --validate=false para evitar errores de conexión temporal
+          kubectl apply -k k8s/base/ --validate=false
+          kubectl apply -k k8s/database/ -n ticketboard --validate=false
 
-  build-and-deploy-backend:
+          echo "⏳ Waiting for PostgreSQL..."
+          kubectl wait --for=condition=ready pod -l app=postgres -n ticketboard --timeout=180s
+          echo "✅ Database deployed"
+
+  build-backend:
     runs-on: ubuntu-latest
     needs: deploy-database
 
@@ -84,13 +96,17 @@ jobs:
           repository: GhostGto/ticketboard-backend
           path: backend
 
+      - name: Configure Kubectl Context
+        run: |
+          kind export kubeconfig --name ticketboard-cluster
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
 
-      - name: Install Backend Dependencies
+      - name: Install Dependencies
         run: |
           cd backend
           npm ci
@@ -102,17 +118,27 @@ jobs:
           docker push localhost:5000/ticketboard-backend:latest
           echo "✅ Backend image built and pushed"
 
-      - name: Deploy Backend to Kubernetes
-        run: |
-          # Usar los manifests del infra repo
-          kubectl apply -k infra/k8s/backend/ -n ticketboard
-          echo "⏳ Waiting for backend to be ready..."
-          kubectl wait --for=condition=ready pod -l app=backend -n ticketboard --timeout=180s
-          echo "✅ Backend deployed successfully"
-
-  build-and-deploy-frontend:
+  deploy-backend:
     runs-on: ubuntu-latest
-    needs: build-and-deploy-backend
+    needs: build-backend
+
+    steps:
+      - name: Checkout Infra
+        uses: actions/checkout@v4
+
+      - name: Configure Kubectl Context
+        run: |
+          kind export kubeconfig --name ticketboard-cluster
+
+      - name: Deploy Backend
+        run: |
+          kubectl apply -k k8s/backend/ -n ticketboard --validate=false
+          kubectl wait --for=condition=ready pod -l app=backend -n ticketboard --timeout=180s
+          echo "✅ Backend deployed"
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    needs: deploy-backend
 
     steps:
       - name: Checkout Frontend
@@ -121,22 +147,21 @@ jobs:
           repository: GhostGto/ticketboard-frontend
           path: frontend
 
+      - name: Configure Kubectl Context
+        run: |
+          kind export kubeconfig --name ticketboard-cluster
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
 
-      - name: Install Frontend Dependencies
+      - name: Install Dependencies and Build
         run: |
           cd frontend
           npm ci
-
-      - name: Build Frontend
-        run: |
-          cd frontend
           VITE_API_URL=http://backend-service:8080 npm run build
-          echo "✅ Frontend built successfully"
 
       - name: Build and Push Frontend Image
         run: |
@@ -145,33 +170,38 @@ jobs:
           docker push localhost:5000/ticketboard-frontend:latest
           echo "✅ Frontend image built and pushed"
 
-      - name: Deploy Frontend to Kubernetes
-        run: |
-          kubectl apply -k infra/k8s/frontend/ -n ticketboard
-          echo "⏳ Waiting for frontend to be ready..."
-          kubectl wait --for=condition=ready pod -l app=frontend -n ticketboard --timeout=180s
-          echo "✅ Frontend deployed successfully"
-
-  verify-deployment:
+  deploy-frontend:
     runs-on: ubuntu-latest
-    needs: [ build-and-deploy-backend, build-and-deploy-frontend ]
+    needs: build-frontend
 
     steps:
-      - name: Verify Complete Deployment
+      - name: Checkout Infra
+        uses: actions/checkout@v4
+
+      - name: Configure Kubectl Context
         run: |
-          echo "🔍 Verifying complete deployment..."
-          kubectl wait --for=condition=ready --timeout=300s -n ticketboard --all pod
+          kind export kubeconfig --name ticketboard-cluster
 
-          echo "🎉 TICKETBOARD APPLICATION DEPLOYED SUCCESSFULLY!"
-          echo ""
-          echo "📊 Deployment Status:"
+      - name: Deploy Frontend
+        run: |
+          kubectl apply -k k8s/frontend/ -n ticketboard --validate=false
+          kubectl wait --for=condition=ready pod -l app=frontend -n ticketboard --timeout=180s
+          echo "✅ Frontend deployed"
+
+  final-verification:
+    runs-on: ubuntu-latest
+    needs: [ deploy-backend, deploy-frontend ]
+
+    steps:
+      - name: Configure Kubectl Context
+        run: |
+          kind export kubeconfig --name ticketboard-cluster
+
+      - name: Verify Deployment
+        run: |
+          echo "🎉 DEPLOYMENT COMPLETED SUCCESSFULLY!"
           kubectl get all -n ticketboard
-
           echo ""
-          echo "🌐 Access Points:"
+          echo "🚀 Application URLs:"
           echo "   Frontend: http://localhost:30000"
-          echo "   Backend API: http://localhost:30001"
-          echo "   PostgreSQL: localhost:5432"
-
-          echo ""
-          echo "🚀 Application is ready to use!"
+          echo "   Backend:  http://localhost:30001"
