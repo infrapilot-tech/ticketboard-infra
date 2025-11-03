@@ -73,5 +73,14 @@ kubectl apply -k k8s/overlays/development
 echo "⏳ Waiting for deployment to complete..."
 kubectl wait --for=condition=ready pod -l app=postgres -n ticketboard --timeout=180s
 
+# Wait for monitoring to be ready
+echo "Waiting for monitoring stack to be ready..."
+kubectl wait --for=condition=ready pod -l app=prometheus -n ticketboard --timeout=120s
+kubectl wait --for=condition=ready pod -l app=grafana -n ticketboard --timeout=120s
+
+echo "Deployment completed!"
+echo "Grafana: http://localhost:3000 (admin/grafana)"
+echo "Prometheus: http://localhost:9090"
+
 echo "✅ Deployment completed!"
 kubectl get all -n ticketboard
