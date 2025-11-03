@@ -256,7 +256,7 @@ jobs:
             name: backend
             namespace: ticketboard
           spec:
-            replicas: 2
+            replicas: 1
             selector:
               matchLabels:
                 app: backend
@@ -314,11 +314,11 @@ jobs:
                     timeoutSeconds: 5
                   resources:
                     requests:
-                      memory: "256Mi"
-                      cpu: "100m"
+                      memory: "64Mi"
+                      cpu: "50m"
                     limits:
-                      memory: "512Mi"
-                      cpu: "500m"
+                      memory: "128Mi"
+                      cpu: "100m"
           EOF
 
       - name: Update backend service
@@ -351,7 +351,7 @@ jobs:
             name: frontend
             namespace: ticketboard
           spec:
-            replicas: 2
+            replicas: 1
             selector:
               matchLabels:
                 app: frontend
@@ -382,11 +382,11 @@ jobs:
                     periodSeconds: 10
                   resources:
                     requests:
-                      memory: "128Mi"
-                      cpu: "50m"
+                      memory: "32Mi"
+                      cpu: "25m"
                     limits:
-                      memory: "256Mi"
-                      cpu: "200m"
+                      memory: "64Mi"
+                      cpu: "50m"
           EOF
 
       - name: Wait for monitoring stack
