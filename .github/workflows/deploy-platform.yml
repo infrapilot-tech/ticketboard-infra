@@ -166,7 +166,7 @@ jobs:
                 - name: grafana
                   image: grafana/grafana:latest
                   ports:
-                  - containerPort: 3000
+                  - containerPort: 3050
                   env:
                   - name: GF_SECURITY_ADMIN_USER
                     value: "admin"
@@ -222,7 +222,7 @@ jobs:
               app: grafana
             ports:
             - port: 3050
-              targetPort: 3000
+              targetPort: 3050
             type: ClusterIP
           EOF
 
@@ -425,7 +425,7 @@ jobs:
 
           echo "📊 Monitoring stack status:"
           echo "Prometheus: http://localhost:9090 (port-forward: kubectl port-forward -n ticketboard service/prometheus-service 9090:9090)"
-          echo "Grafana: http://localhost:3050 (port-forward: kubectl port-forward -n ticketboard service/grafana-service 3050:3000)"
+          echo "Grafana: http://localhost:3050 (port-forward: kubectl port-forward -n ticketboard service/grafana-service 3050:3050)"
           echo "Grafana credentials: admin/grafana"
 
       - name: Create Ingress for monitoring (optional)
