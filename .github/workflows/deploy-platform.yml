@@ -388,6 +388,17 @@ jobs:
                       memory: "64Mi"
                       cpu: "50m"
           EOF
+      - name: Deploy Kafka Stack
+        run: |
+          echo "🔔 Deploying Kafka stack..."
+          kubectl apply -f k8s/kafka/zookeeper.yaml -n ticketboard
+          kubectl apply -f k8s/kafka/kafka.yaml -n ticketboard
+
+      - name: Wait for Kafka
+        run: |
+          echo "⏳ Waiting for Kafka to be ready..."
+          kubectl wait --for=condition=ready pod -l app=kafka -n ticketboard --timeout=180s
+          kubectl wait --for=condition=ready pod -l app=zookeeper -n ticketboard --timeout=180s
 
       - name: Wait for monitoring stack
         run: |
