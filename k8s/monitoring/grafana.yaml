@@ -59,6 +59,6 @@ spec:
   selector:
     app: grafana
   ports:
-    - port: 3000
+    - port: 3050
       targetPort: 3000
   type: ClusterIP

@@ -79,7 +79,7 @@ kubectl wait --for=condition=ready pod -l app=prometheus -n ticketboard --timeou
 kubectl wait --for=condition=ready pod -l app=grafana -n ticketboard --timeout=120s
 
 echo "Deployment completed!"
-echo "Grafana: http://localhost:3000 (admin/grafana)"
+echo "Grafana: http://localhost:3050 (admin/grafana)"
 echo "Prometheus: http://localhost:9090"
 
 echo "✅ Deployment completed!"

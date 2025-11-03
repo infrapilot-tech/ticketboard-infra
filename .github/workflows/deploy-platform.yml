@@ -221,7 +221,7 @@ jobs:
             selector:
               app: grafana
             ports:
-            - port: 3000
+            - port: 3050
               targetPort: 3000
             type: ClusterIP
           EOF
@@ -425,7 +425,7 @@ jobs:
 
           echo "📊 Monitoring stack status:"
           echo "Prometheus: http://localhost:9090 (port-forward: kubectl port-forward -n ticketboard service/prometheus-service 9090:9090)"
-          echo "Grafana: http://localhost:3000 (port-forward: kubectl port-forward -n ticketboard service/grafana-service 3000:3000)"
+          echo "Grafana: http://localhost:3050 (port-forward: kubectl port-forward -n ticketboard service/grafana-service 3050:3000)"
           echo "Grafana credentials: admin/grafana"
 
       - name: Create Ingress for monitoring (optional)
@@ -457,5 +457,5 @@ jobs:
                     service:
                       name: grafana-service
                       port:
-                        number: 3000
+                        number: 3050
           EOF
