@@ -256,7 +256,7 @@ jobs:
             name: backend
             namespace: ticketboard
           spec:
-            replicas: 1
+            replicas: 2
             selector:
               matchLabels:
                 app: backend
@@ -351,7 +351,7 @@ jobs:
             name: frontend
             namespace: ticketboard
           spec:
-            replicas: 1
+            replicas: 2
             selector:
               matchLabels:
                 app: frontend
