@@ -36,6 +36,196 @@ jobs:
             --docker-password=${{ secrets.DOCKERHUB_TOKEN }} \
             -n ticketboard --dry-run=client -o yaml | kubectl apply -f -
 
+      - name: Deploy Monitoring Stack
+        run: |
+          echo "📊 Deploying monitoring stack..."
+          # Crear ConfigMap de Prometheus
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: prometheus-config
+            namespace: ticketboard
+          data:
+            prometheus.yml: |
+              global:
+                scrape_interval: 15s
+                evaluation_interval: 15s
+              
+              scrape_configs:
+                - job_name: 'prometheus'
+                  static_configs:
+                    - targets: ['localhost:9090']
+
+                - job_name: 'ticketboard-backend'
+                  static_configs:
+                    - targets: ['backend-service:3000']
+                  metrics_path: '/metrics'
+                  scrape_interval: 10s
+
+                - job_name: 'ticketboard-frontend'
+                  static_configs:
+                    - targets: ['frontend-service:80']
+                  metrics_path: '/metrics'
+                  scrape_interval: 10s
+            alert-rules.yml: |
+              groups:
+              - name: ticketboard.rules
+                rules:
+                - alert: BackendDown
+                  expr: up{job="ticketboard-backend"} == 0
+                  for: 1m
+                  labels:
+                    severity: critical
+                  annotations:
+                    summary: "Backend service is down"
+                    description: "The ticketboard backend has been down for more than 1 minute."
+          EOF
+
+          # Desplegar Prometheus
+          kubectl apply -f - <<EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: prometheus
+            namespace: ticketboard
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: prometheus
+            template:
+              metadata:
+                labels:
+                  app: prometheus
+              spec:
+                containers:
+                - name: prometheus
+                  image: prom/prometheus:latest
+                  ports:
+                  - containerPort: 9090
+                  volumeMounts:
+                  - name: prometheus-config
+                    mountPath: /etc/prometheus
+                  - name: prometheus-storage
+                    mountPath: /prometheus
+                  args:
+                  - '--config.file=/etc/prometheus/prometheus.yml'
+                  - '--storage.tsdb.path=/prometheus'
+                  - '--storage.tsdb.retention.time=200h'
+                  - '--web.enable-lifecycle'
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "100m"
+                    limits:
+                      memory: "1Gi"
+                      cpu: "500m"
+                volumes:
+                - name: prometheus-config
+                  configMap:
+                    name: prometheus-config
+                - name: prometheus-storage
+                  emptyDir: {}
+          EOF
+
+          # Servicio de Prometheus
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: prometheus-service
+            namespace: ticketboard
+          spec:
+            selector:
+              app: prometheus
+            ports:
+            - port: 9090
+              targetPort: 9090
+            type: ClusterIP
+          EOF
+
+          # Desplegar Grafana
+          kubectl apply -f - <<EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: grafana
+            namespace: ticketboard
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: grafana
+            template:
+              metadata:
+                labels:
+                  app: grafana
+              spec:
+                containers:
+                - name: grafana
+                  image: grafana/grafana:latest
+                  ports:
+                  - containerPort: 3000
+                  env:
+                  - name: GF_SECURITY_ADMIN_USER
+                    value: "admin"
+                  - name: GF_SECURITY_ADMIN_PASSWORD
+                    value: "grafana"
+                  volumeMounts:
+                  - name: grafana-storage
+                    mountPath: /var/lib/grafana
+                  - name: grafana-datasources
+                    mountPath: /etc/grafana/provisioning/datasources
+                  resources:
+                    requests:
+                      memory: "256Mi"
+                      cpu: "100m"
+                    limits:
+                      memory: "512Mi"
+                      cpu: "300m"
+                volumes:
+                - name: grafana-storage
+                  emptyDir: {}
+                - name: grafana-datasources
+                  configMap:
+                    name: grafana-datasources
+          EOF
+
+          # ConfigMap para datasources de Grafana
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: grafana-datasources
+            namespace: ticketboard
+          data:
+            datasources.yaml: |
+              apiVersion: 1
+              datasources:
+              - name: Prometheus
+                type: prometheus
+                access: proxy
+                url: http://prometheus-service:9090
+                isDefault: true
+          EOF
+
+          # Servicio de Grafana
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: grafana-service
+            namespace: ticketboard
+          spec:
+            selector:
+              app: grafana
+            ports:
+            - port: 3000
+              targetPort: 3000
+            type: ClusterIP
+          EOF
+
       - name: Deploy Database
         run: |
           echo "🗄️ Deploying database..."
@@ -74,6 +264,10 @@ jobs:
               metadata:
                 labels:
                   app: backend
+                annotations:
+                  prometheus.io/scrape: "true"
+                  prometheus.io/port: "3000"
+                  prometheus.io/path: "/metrics"
               spec:
                 imagePullSecrets:
                 - name: dockerhub-secret
@@ -195,6 +389,12 @@ jobs:
                       cpu: "200m"
           EOF
 
+      - name: Wait for monitoring stack
+        run: |
+          echo "⏳ Waiting for monitoring stack..."
+          kubectl wait --for=condition=ready pod -l app=prometheus -n ticketboard --timeout=180s
+          kubectl wait --for=condition=ready pod -l app=grafana -n ticketboard --timeout=180s
+
       - name: Wait for database
         run: |
           echo "⏳ Waiting for PostgreSQL to be ready..."
@@ -206,12 +406,56 @@ jobs:
           timeout 300s bash -c 'until kubectl get pods -n ticketboard -l app=backend --no-headers 2>/dev/null | grep -q "Running"; do sleep 5; done'
           timeout 300s bash -c 'until kubectl get pods -n ticketboard -l app=frontend --no-headers 2>/dev/null | grep -q "Running"; do sleep 5; done'
 
-      - name: Verify deployment
+      - name: Verify deployment and monitoring
         run: |
           echo "✅ Deployment completed!"
           echo "📊 Pods status:"
           kubectl get pods -n ticketboard
           echo "🌐 Services:"
           kubectl get services -n ticketboard
+
           echo "🔍 Testing connectivity..."
           kubectl exec -n ticketboard -it $(kubectl get pod -n ticketboard -l app=backend -o name | head -1) -- curl -f http://localhost:3000/healthz && echo "✅ Backend health check passed"
+
+          echo "📈 Testing metrics endpoint..."
+          kubectl exec -n ticketboard -it $(kubectl get pod -n ticketboard -l app=backend -o name | head -1) -- curl -f http://localhost:3000/metrics && echo "✅ Backend metrics available"
+
+          echo "🎯 Testing Prometheus targets..."
+          kubectl exec -n ticketboard -it $(kubectl get pod -n ticketboard -l app=prometheus -o name) -- wget -q -O - http://localhost:9090/api/v1/targets | grep -q "ticketboard-backend" && echo "✅ Prometheus scraping backend"
+
+          echo "📊 Monitoring stack status:"
+          echo "Prometheus: http://localhost:9090 (port-forward: kubectl port-forward -n ticketboard service/prometheus-service 9090:9090)"
+          echo "Grafana: http://localhost:3000 (port-forward: kubectl port-forward -n ticketboard service/grafana-service 3000:3000)"
+          echo "Grafana credentials: admin/grafana"
+
+      - name: Create Ingress for monitoring (optional)
+        run: |
+          echo "🌐 Creating ingress for monitoring services..."
+          kubectl apply -f - <<EOF
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: monitoring-ingress
+            namespace: ticketboard
+            annotations:
+              nginx.ingress.kubernetes.io/rewrite-target: /
+          spec:
+            rules:
+            - host: localhost
+              http:
+                paths:
+                - path: /prometheus
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: prometheus-service
+                      port:
+                        number: 9090
+                - path: /grafana
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: grafana-service
+                      port:
+                        number: 3000
+          EOF
